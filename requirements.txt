@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+langchain==0.3.25
+langchain-google-genai==2.1.5
+chromadb==0.4.24
+beautifulsoup4
+requests
