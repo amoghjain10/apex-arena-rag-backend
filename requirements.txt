@@ -1,8 +1,9 @@
 fastapi
 uvicorn
 python-dotenv
-langchain==0.3.25
-langchain-google-genai==2.1.5
-chromadb==0.4.24
 beautifulsoup4
-requests
+langchain # <--- REMOVE VERSION
+langchain-google-genai # <--- REMOVE VERSION
+chromadb # Can keep or remove, but it's not used with Pinecone
+pinecone-client
+langchain-pinecone # <--- REMOVE VERSION

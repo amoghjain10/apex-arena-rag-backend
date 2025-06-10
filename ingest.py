@@ -1,131 +1,125 @@
 import os
-import requests
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-
-# LangChain components
-from langchain_community.document_loaders import TextLoader # Or HtmlLoader if you load local files
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from bs4 import BeautifulSoup
+import requests
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_community.document_loaders import TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from pinecone import Pinecone, ServerlessSpec
+from langchain_pinecone import PineconeVectorStore
 
-# Load environment variables (your Google API key)
 load_dotenv()
+
+# --- Environment Variables ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
 
 if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found in .env file. Please set it.")
+    raise ValueError("GOOGLE_API_KEY not found in .env file.")
+if not PINECONE_API_KEY:
+    raise ValueError("PINECONE_API_KEY not found in .env file.")
+if not PINECONE_ENVIRONMENT:
+    raise ValueError("PINECONE_ENVIRONMENT not found in .env file.")
 
 # --- Configuration ---
-# List of URLs to scrape from your website
 WEBSITE_URLS = [
-    "https://theapexarena.framer.website/", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/",
     "https://theapexarena.framer.website/taylor-swift",
-    "https://theapexarena.framer.website/brunch", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/brunch",
     "https://theapexarena.framer.website/trade-show",
-    "https://theapexarena.framer.website/basketball", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/basketball",
     "https://theapexarena.framer.website/community-gathering",
-    "https://theapexarena.framer.website/seminar", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/seminar",
     "https://theapexarena.framer.website/renting",
-    "https://theapexarena.framer.website/about-us", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/about-us",
     "https://theapexarena.framer.website/projects/le-blink",
-    "https://theapexarena.framer.website/projects/schlong", # Replace with your actual Framer URL
+    "https://theapexarena.framer.website/projects/schlong",
     "https://theapexarena.framer.website/projects/vintage-everything",
-    "https://theapexarena.framer.website/projects/senseya", # Replace with your actual Framer URL
-    "https://theapexarena.framer.website/projects", # Example for an events page
-    # Add more URLs for your services, FAQ, contact, etc.
+    "https://theapexarena.framer.website/projects/senseya",
+    "https://theapexarena.framer.website/projects"
 ]
-# Directory to store scraped text (optional, but good for debugging)
-TEXT_DATA_DIR = "text_data"
-# Directory where ChromaDB will store its persistent data
-CHROMA_DB_DIR = "chroma_db"
+INDEX_NAME = "apex-arena-rag"
+DIMENSIONS = 768 # Confirmed for Google Generative AI Embeddings
+METRIC = "cosine"
 
-# --- Web Scraper Function ---
-def scrape_website_content(urls):
-    print("Starting website scraping...")
+# --- Data Ingestion Functions ---
+def scrape_website(url):
+    print(f"Scraping {url}...")
+    try:
+        response = requests.get(url)
+        response.raise_for_status() # Raise an exception for HTTP errors
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract relevant text - adjust selectors based on your website's structure
+        paragraphs = soup.find_all(['p', 'h1', 'h2', 'h3', 'li'])
+        text_content = ' '.join([para.get_text(separator=' ', strip=True) for para in paragraphs])
+        return text_content
+    except requests.exceptions.RequestException as e:
+        print(f"Error scraping {url}: {e}")
+        return None
+
+def save_text_to_file(text, filename):
+    os.makedirs("text_data", exist_ok=True)
+    filepath = os.path.join("text_data", filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"Saved text to {filepath}")
+    return filepath
+
+def load_documents_from_files(text_dir="text_data"):
     documents = []
-    os.makedirs(TEXT_DATA_DIR, exist_ok=True)
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    } # ADD THESE LINES
-
-    for url in urls:
-        try:
-            print(f"Scraping: {url}")
-            response = requests.get(url, timeout=10)
-            response.raise_for_status() # Raise an exception for HTTP errors
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Extract main content (adjust selectors based on your Framer site's HTML)
-            # Common selectors: 'main', 'article', 'div.content-section'
-            # Inspect your Framer site's HTML to find the best selector
-            main_content = soup.find('body') # Often 'body' or a specific content div
-            if main_content:
-                text_content = main_content.get_text(separator='\n', strip=True)
-                # Filter out common script/style tags if they get through
-                text_content = "\n".join(
-                    [line for line in text_content.splitlines() if line.strip() and not line.strip().startswith(('var', 'function', '{', '}', '//'))]
-                )
-
-                # Save for inspection
-                filename = os.path.join(TEXT_DATA_DIR, f"{url.replace('https://', '').replace('/', '_')}.txt")
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(text_content)
-                documents.append({"page_content": text_content, "metadata": {"source": url}})
-                print(f"  - Scraped {len(text_content)} characters from {url}")
-            else:
-                print(f"  - No main content found for {url}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"  - Error scraping {url}: {e}")
-        except Exception as e:
-            print(f"  - An unexpected error occurred with {url}: {e}")
-    print("Scraping finished.")
+    for filename in os.listdir(text_dir):
+        if filename.endswith(".txt"):
+            filepath = os.path.join(text_dir, filename)
+            loader = TextLoader(filepath)
+            documents.extend(loader.load())
     return documents
 
-# --- Main Ingestion Logic ---
-def ingest_data():
-    print("Starting data ingestion process...")
+def ingest_data_to_pinecone():
+    print("Starting data ingestion to Pinecone...")
 
-    # 1. Scrape content
-    raw_documents = scrape_website_content(WEBSITE_URLS)
-    if not raw_documents:
-        print("No documents scraped. Exiting ingestion.")
-        return
+    # 1. Scrape websites and save to local files (as before)
+    scraped_files = []
+    for url in WEBSITE_URLS:
+        text = scrape_website(url)
+        if text:
+            filename = url.replace("https://", "").replace("/", "_").replace(".", "_") + ".txt"
+            scraped_files.append(save_text_to_file(text, filename))
 
-    # 2. Split documents into chunks
-    print("Splitting documents into chunks...")
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,      # Characters per chunk
-        chunk_overlap=200,    # Overlap between chunks to maintain context
-        length_function=len,
-        is_separator_regex=False,
+    # 2. Load documents from scraped files
+    documents = load_documents_from_files()
+    print(f"Loaded {len(documents)} documents from text files.")
+
+    # 3. Split documents into chunks
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = text_splitter.split_documents(documents)
+    print(f"Split into {len(chunks)} chunks.")
+
+    # 4. Initialize Google Generative AI Embeddings
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
+    # 5. Initialize Pinecone and create/connect to index
+    pc = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+
+    if INDEX_NAME not in [index.name for index in pc.list_indexes()]:
+        print(f"Creating Pinecone index '{INDEX_NAME}'...")
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=DIMENSIONS,
+            metric=METRIC,
+            spec=ServerlessSpec(cloud='aws', region='us-east-1') # Confirmed from your screenshot
+        )
+        print(f"Index '{INDEX_NAME}' created.")
+    else:
+        print(f"Index '{INDEX_NAME}' already exists.")
+
+    # 6. Upload chunks to Pinecone
+    print(f"Uploading {len(chunks)} chunks to Pinecone index '{INDEX_NAME}'...")
+    # PineconeVectorStore.from_documents will handle the embedding and upload
+    vectorstore = PineconeVectorStore.from_documents(
+        chunks, embeddings, index_name=INDEX_NAME
     )
-    texts = []
-    for doc in raw_documents:
-        # LangChain's text splitter expects Document objects
-        # Convert raw_documents to LangChain Document objects if not already
-        from langchain.docstore.document import Document
-        doc_obj = Document(page_content=doc['page_content'], metadata=doc['metadata'])
-        texts.extend(text_splitter.split_documents([doc_obj]))
-    print(f"Split into {len(texts)} chunks.")
-
-    # 3. Create embeddings
-    print("Creating embeddings (this may take a while)...")
-    embeddings_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_API_KEY)
-
-    # 4. Store in ChromaDB
-    print(f"Storing embeddings in ChromaDB at {CHROMA_DB_DIR}...")
-    # This will create/load the collection and add the documents
-    vectordb = Chroma.from_documents(
-        documents=texts,
-        embedding=embeddings_model,
-        persist_directory=CHROMA_DB_DIR
-    )
-    vectordb.persist() # Ensures data is written to disk
-    print("Data ingestion complete. ChromaDB updated.")
+    print("Data ingestion to Pinecone complete!")
 
 if __name__ == "__main__":
-    ingest_data()
+    ingest_data_to_pinecone()
