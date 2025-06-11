@@ -1,6 +1,8 @@
+# .gitignore content
 .env
 venv/
 __pycache__/
 *.pyc
+# Temporarily remove chroma_db/ from .gitignore for Option A deployment
+# chroma_db/
 text_data/
-chroma_db/
