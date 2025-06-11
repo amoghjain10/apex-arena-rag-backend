@@ -3,3 +3,4 @@ venv/
 __pycache__/
 *.pyc
 text_data/
+chroma_db/

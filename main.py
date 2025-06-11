@@ -51,7 +51,7 @@ app.add_middleware(
 
 # --- RAG Components Initialization ---
 # Initialize LLM (Gemini model)
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-preview-05-20", google_api_key=GOOGLE_API_KEY, temperature=0.7)
+llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Initialize embeddings for RAG
 embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
